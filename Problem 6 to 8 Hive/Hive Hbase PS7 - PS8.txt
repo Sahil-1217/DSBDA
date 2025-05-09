@@ -1,0 +1,132 @@
+Part A: HiveQL Relational Schema & Queries
+1. Create the Three Hive Tables
+-- a) customer_info: Cust-ID, Cust-Name, order_id
+CREATE TABLE customer_info (
+  cust_id    STRING,
+  cust_name  STRING,
+  order_id   STRING
+)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY '\t'
+STORED AS TEXTFILE;
+
+-- a) order_info: OrderID, ItemID, Quantity
+CREATE TABLE order_info (
+  order_id   STRING,
+  item_id    STRING,
+  quantity   INT
+)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY '\t'
+STORED AS TEXTFILE;
+
+-- a) item_info: Item-ID, Item-Name, ItemPrice
+CREATE TABLE item_info (
+  item_id    STRING,
+  item_name  STRING,
+  item_price DOUBLE
+)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY '\t'
+STORED AS TEXTFILE;
+
+2. Load Data from Local Files
+-- b) Load into Hive (local)
+LOAD DATA LOCAL INPATH '/path/to/customer_info.txt'
+INTO TABLE customer_info;
+
+LOAD DATA LOCAL INPATH '/path/to/order_info.txt'
+INTO TABLE order_info;
+
+LOAD DATA LOCAL INPATH '/path/to/item_info.txt'
+INTO TABLE item_info;
+
+
+3. Join Tables in Hive
+-- c) Join customer → orders → items to get line-item sales per customer
+SELECT
+  c.cust_id,
+  c.cust_name,
+  o.order_id,
+  i.item_name,
+  o.quantity,
+  i.item_price,
+  (o.quantity * i.item_price) AS line_total
+FROM customer_info c
+JOIN order_info   o ON c.order_id = o.order_id
+JOIN item_info    i ON o.item_id  = i.item_id;
+
+4. Create an Index on customer_info
+-- d) Create an index on customer_info.cust_id to speed lookups
+CREATE INDEX idx_cust_id
+ON TABLE customer_info (cust_id)
+AS 'COMPACT'
+WITH DEFERRED REBUILD;
+-- then:
+ALTER INDEX idx_cust_id ON customer_info REBUILD;
+
+5. Find Total & Average Sales
+-- e) Aggregate total and average sales per customer
+SELECT
+  c.cust_id,
+  c.cust_name,
+  SUM(o.quantity * i.item_price)   AS total_sales,
+  AVG(o.quantity * i.item_price)   AS avg_sales
+FROM customer_info c
+JOIN order_info   o ON c.order_id = o.order_id
+JOIN item_info    i ON o.item_id  = i.item_id
+GROUP BY c.cust_id, c.cust_name;
+
+6. Find Order Details with Maximum Cost
+-- f) Which single order line had the maximum line_total?
+SELECT
+  c.cust_id,
+  c.cust_name,
+  o.order_id,
+  i.item_name,
+  o.quantity,
+  i.item_price,
+  (o.quantity * i.item_price) AS line_total
+FROM customer_info c
+JOIN order_info   o ON c.order_id = o.order_id
+JOIN item_info    i ON o.item_id  = i.item_id
+ORDER BY line_total DESC
+LIMIT 1;
+
+
+Part B: HBase Integration
+1. Create the HBase Table for Customer Info
+$ hbase shell
+> create 'cust_info', 'info'
+
+
+8. Define an External Hive Table over HBas2
+-- g) Tell Hive to use HBaseStorageHandler and map columns
+CREATE EXTERNAL TABLE cust_info_hbase (
+  rowkey     STRING,      -- maps to HBase row key
+  cust_name  STRING,
+  order_id   STRING
+)
+STORED BY 'org.apache.hadoop.hive.hbase.HBaseStorageHandler'
+WITH SERDEPROPERTIES (
+  "hbase.columns.mapping" = ":key,info:cust_name,info:order_id"
+)
+TBLPROPERTIES (
+  "hbase.table.name" = "cust_info"
+);
+
+9. Populate HBase via Hive
+If you want to copy all existing customer_info rows into HBase:
+-- insert into the HBase-backed table
+INSERT OVERWRITE TABLE cust_info_hbase
+SELECT
+  cust_id   AS rowkey,
+  cust_name,
+  order_id
+FROM customer_info;
+
+10. Display Records from HBase
+$ hbase shell
+> scan 'cust_info'
+
+
